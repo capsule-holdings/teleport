@@ -1,0 +1,30 @@
+name: Prepare Terraform Execution
+
+on:
+  workflow_call:
+    inputs:
+      dirs_file:
+        type: string
+        description: The JSON file to read matrix values from
+        required: false
+        default: .github/tf/config/local/dirs.json
+    outputs:
+      bot_name:
+        description: bot name
+        value: ${{ jobs.envs.outputs.bot_name }}
+      max_parallel:
+        description: max parallel
+        value: ${{ jobs.envs.outputs.max_parallel }}
+      dirs:
+        description: dirs
+        value: ${{ jobs.dirs.outputs.dirs }}
+
+jobs:
+  envs:
+    uses: ./.github/workflows/_tf_envs.yml
+
+  dirs:
+    uses: ./.github/workflows/_tf_dirs.yml
+    with:
+      file: ${{ inputs.dirs_file }}
+    secrets: inherit

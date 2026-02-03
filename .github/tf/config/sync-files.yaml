@@ -1,0 +1,11 @@
+# Sync対象のファイル・ディレクトリリスト
+files:
+  - .github/tf/
+  - .github/workflows/tf_*
+  - .github/workflows/_tf_*
+  - .github/actions/tf_*
+
+# 除外対象のファイルリスト
+exclude:
+  - .github/tf/config/local/
+  - .github/actions/tf_patch/

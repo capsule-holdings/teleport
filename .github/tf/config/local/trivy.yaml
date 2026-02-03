@@ -1,0 +1,9 @@
+# 脆弱性が検知されたときにexit code 1で終了する
+exit-code: 1
+
+misconfiguration:
+  terraform:
+    exclude-downloaded-modules: true # 外部モジュールは対象外にするため除外
+
+severity:
+  - CRITICAL

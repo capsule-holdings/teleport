@@ -1,0 +1,63 @@
+name: Get Directories
+
+on:
+  workflow_call:
+    inputs:
+      file:
+        type: string
+        description: The JSON file to read matrix values from
+        required: false
+        default: .github/tf/config/local/dirs.json
+    outputs:
+      dirs:
+        description: dirs
+        value: ${{ jobs.dirs.outputs.dirs }}
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  dirs:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+
+    outputs:
+      dirs: ${{ steps.dirs.outputs.dirs }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      # dirs.json から全ディレクトリ一覧を読む
+      - name: Read all directories from JSON
+        id: read-all-dirs
+        shell: bash
+        run: |
+          echo "Reading dirs from ${{ inputs.file }}"
+          dirs=$(jq -c . < "${{ inputs.file }}")
+          echo "all_dirs=$dirs" >> "$GITHUB_OUTPUT"
+
+      # filters.yaml と filters.local.yaml と dirs.json をマージして 1 ファイルにする
+      - name: Merge global and local filters
+        id: merge-filters
+        shell: bash
+        run: .github/tf/scripts/merge-filters.sh "${{ inputs.file }}"
+
+      # マージ済みフィルタを使って、フィルタに定義されたパスにマッチする変更ファイルを取得
+      - name: Check for changes using merged filters
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        with:
+          filters: /tmp/filters.merged.yaml
+          list-files: json
+
+      # 変更されたファイルが属するディレクトリを抽出して dirs として出力
+      - name: Filter directories with changes
+        id: dirs
+        shell: bash
+        run: |
+          result=$(.github/tf/scripts/filter-dirs.sh \
+            '${{ steps.filter.outputs.terraform_trigger }}' \
+            '${{ steps.read-all-dirs.outputs.all_dirs }}' \
+            '${{ toJSON(steps.filter.outputs) }}')
+          echo "$result" >> "$GITHUB_OUTPUT"

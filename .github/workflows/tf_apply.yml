@@ -1,0 +1,77 @@
+name: Terraform Apply Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-maintenance:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    outputs:
+      is_maintenance: ${{ steps.check.outputs.is_maintenance }}
+      slack_channel_id: ${{ steps.load-env.outputs.slack_channel_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Load Environment Variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Output Slack Channel ID
+        id: load-env
+        run: |
+          echo "slack_channel_id=${{ env.SLACK_CHANNEL_ID }}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Maintenance Mode
+        id: check
+        run: |
+          if [ "${{ vars.TF_MAINTENANCE }}" = "true" ]; then
+            echo "::warning::Maintenance mode is enabled. Skipping terraform apply."
+            echo "is_maintenance=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_maintenance=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  envs:
+    needs: check-maintenance
+    if: needs.check-maintenance.outputs.is_maintenance != 'true'
+    uses: ./.github/workflows/_tf_envs.yml
+
+  dirs:
+    needs: [check-maintenance, envs]
+    if: needs.check-maintenance.outputs.is_maintenance != 'true'
+    uses: ./.github/workflows/_tf_dirs.yml
+    secrets: inherit
+
+  apply:
+    needs: [check-maintenance, envs, dirs]
+    if: needs.check-maintenance.outputs.is_maintenance != 'true' && needs.dirs.outputs.dirs != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJson(needs.dirs.outputs.dirs) }}
+      max-parallel: ${{ fromJson(needs.envs.outputs.max_parallel) }}
+    concurrency:
+      group: apply-${{ matrix.env }}
+    uses: ./.github/workflows/_tf_terraform.yml
+    with:
+      directory: ${{ matrix.env }}
+      terraform_command_options: apply -auto-approve
+    secrets: inherit
+
+  slack-maintenance:
+    needs: check-maintenance
+    if: needs.check-maintenance.outputs.is_maintenance == 'true' && needs.check-maintenance.outputs.slack_channel_id != ''
+    uses: ./.github/workflows/_tf_slack_notification.yml
+    with:
+      directory: "(all directories)"
+      job_status: maintenance
+      slack_channel_id: ${{ needs.check-maintenance.outputs.slack_channel_id }}
+    secrets: inherit

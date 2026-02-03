@@ -1,0 +1,36 @@
+name: Load Environment Variables
+description: Load environment variables from .env files
+
+inputs:
+  directory:
+    description: working directory for state-specific .env
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Extract Global Environment Variables
+      shell: bash
+      run: |
+        if [ -f .github/tf/config/.env ]; then
+          envsubst < .github/tf/config/.env >> "$GITHUB_ENV"
+          envsubst < .github/tf/config/.env >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Extract Local Environment Variables
+      shell: bash
+      run: |
+        if [ -f .github/tf/config/local/.env.local ]; then
+          envsubst < .github/tf/config/local/.env.local >> "$GITHUB_ENV"
+          envsubst < .github/tf/config/local/.env.local >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Extract State Environment Variables
+      if: inputs.directory != ''
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.directory }}/.env" ]; then
+          envsubst < "${{ inputs.directory }}/.env" >> "$GITHUB_ENV"
+          envsubst < "${{ inputs.directory }}/.env" >> "$GITHUB_OUTPUT"
+        fi

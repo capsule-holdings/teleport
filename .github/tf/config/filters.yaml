@@ -1,0 +1,7 @@
+terraform_trigger:
+  - modules/**
+  - .github/tf/**
+  - .github/actions/tf_*/**
+  - .github/workflows/tf_*
+  - .github/workflows/_tf_*
+  - .terraform-version

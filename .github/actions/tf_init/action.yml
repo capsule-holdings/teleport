@@ -1,0 +1,202 @@
+name: Terraform Init
+description: Terraform Init
+
+inputs:
+  directory:
+    description: working directory
+    required: true
+  # .env: AWS_ACCESS_KEY_PLAN / AWS_ACCESS_KEY_APPLY を設定
+  # .env: AWS_SECRET_ACCESS_KEY_NAME=AWS_SECRET_ACCESS_KEY_${TERRAFORM_ACTION_UPPER} (例)
+  #       GitHub Secretに AWS_SECRET_ACCESS_KEY_PLAN (ReadOnly) と AWS_SECRET_ACCESS_KEY_APPLY (ReadWrite) を登録
+  aws-secret-access-key:
+    description: AWS secret access key for authentication
+    required: false
+  # .env: GCP_SERVICE_ACCOUNT_KEY_NAME=GCP_SA_KEY_${TERRAFORM_ACTION_UPPER} (例)
+  #       GitHub Secretに GCP_SA_KEY_PLAN (ReadOnly) と GCP_SA_KEY_APPLY (ReadWrite) を登録
+  gcp-service-account-key:
+    description: GCP service account key for authentication
+    required: false
+  # .env: GITHUB_APP_PRIVATE_KEY_NAME=APP_PRIVATE_KEY_${TERRAFORM_ACTION_UPPER} (例)
+  #       GitHub Secretに APP_PRIVATE_KEY_PLAN (ReadOnly) と APP_PRIVATE_KEY_APPLY (ReadWrite) を登録
+  # .env: GITHUB_APP_ID_PLAN=<App ID>, GITHUB_APP_ID_APPLY=<App ID>
+  github-app-private-key:
+    description: GitHub App private key for authentication
+    required: false
+  cloudflare-api-token:
+    description: Cloudflare API token for authentication
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Check if tf_patch action exists
+      id: check-patch
+      shell: bash
+      run: |
+        if [ -d ".github/actions/tf_patch" ]; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Patch Terraform Files via tf_patch
+      if: steps.check-patch.outputs.exists == 'true'
+      uses: ./.github/actions/tf_patch
+      with:
+        directory: ${{ inputs.directory }}
+
+    - name: Extract Environment Variables
+      shell: bash
+      run: |
+        echo "REPO_NAME=${GITHUB_REPOSITORY#${GITHUB_REPOSITORY_OWNER}/}" >> $GITHUB_ENV
+
+    - name: Load Environment Variables
+      uses: ./.github/actions/tf_load_env
+      with:
+        directory: ${{ inputs.directory }}
+
+    # ========================================
+    # AWS Authentication
+    # ========================================
+    - name: Resolve AWS Access Key ID
+      if: env.AWS_REGION != ''
+      shell: bash
+      run: |
+        # AWS_ACCESS_KEY_PLAN または AWS_ACCESS_KEY_APPLY から値を取得
+        ACCESS_KEY_VAR="AWS_ACCESS_KEY_${TERRAFORM_ACTION_UPPER}"
+        ACCESS_KEY="${!ACCESS_KEY_VAR}"
+        if [ -n "$ACCESS_KEY" ]; then
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Configure AWS credentials with role to assume
+      if: env.AWS_ROLE_TO_ASSUME != ''
+      uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+
+    - name: Configure AWS credentials with secret access key
+      if: inputs.aws-secret-access-key != ''
+      uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+
+    # ========================================
+    # GCP Authentication
+    # ========================================
+    - name: Authenticate to Google Cloud with Workload Identity
+      if: env.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+    - name: Authenticate to Google Cloud with service account key
+      if: inputs.gcp-service-account-key != ''
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      with:
+        credentials_json: ${{ inputs.gcp-service-account-key }}
+
+    # ========================================
+    # GitHub Authentication
+    # ========================================
+    - name: Resolve GitHub App ID and Installation ID
+      if: inputs.github-app-private-key != ''
+      id: resolve-github-app
+      shell: bash
+      run: |
+        # TERRAFORM_ACTION_UPPERに応じた環境変数名を構築
+        # 例: GITHUB_APP_ID_PLAN または GITHUB_APP_ID_APPLY
+        APP_ID_VAR="GITHUB_APP_ID_${TERRAFORM_ACTION_UPPER}"
+        APP_ID="${!APP_ID_VAR}"
+
+        # フォールバック: アクション固有の変数がなければ汎用のGITHUB_APP_IDを使用
+        if [ -z "$APP_ID" ]; then
+          APP_ID="$GITHUB_APP_ID"
+        fi
+
+        # GITHUB_APP_INSTALLATION_IDも同様に解決
+        # 例: GITHUB_APP_INSTALLATION_ID_PLAN または GITHUB_APP_INSTALLATION_ID_APPLY
+        INSTALLATION_ID_VAR="GITHUB_APP_INSTALLATION_ID_${TERRAFORM_ACTION_UPPER}"
+        INSTALLATION_ID="${!INSTALLATION_ID_VAR}"
+
+        # フォールバック: アクション固有の変数がなければ汎用のGITHUB_APP_INSTALLATION_IDを使用
+        if [ -z "$INSTALLATION_ID" ]; then
+          INSTALLATION_ID="$GITHUB_APP_INSTALLATION_ID"
+        fi
+
+        echo "app-id=$APP_ID" >> "$GITHUB_OUTPUT"
+        echo "installation-id=$INSTALLATION_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Generate GitHub App token
+      if: inputs.github-app-private-key != ''
+      uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+      id: github-app-token
+      with:
+        app-id: ${{ steps.resolve-github-app.outputs.app-id }}
+        private-key: ${{ inputs.github-app-private-key }}
+        owner: ${{ env.GITHUB_APP_OWNER }}
+
+    - name: Set GitHub App environment variables
+      if: inputs.github-app-private-key != ''
+      shell: bash
+      run: |
+        echo "GITHUB_APP_ID=${{ steps.resolve-github-app.outputs.app-id }}" >> "$GITHUB_ENV"
+        echo "GITHUB_APP_INSTALLATION_ID=${{ steps.resolve-github-app.outputs.installation-id }}" >> "$GITHUB_ENV"
+
+    - name: Set Terraform variables for GitHub App
+      if: inputs.github-app-private-key != ''
+      shell: bash
+      run: |
+        {
+          echo "TF_VAR_github_app_id=${{ steps.resolve-github-app.outputs.app-id }}"
+          echo "TF_VAR_github_app_installation_id=${{ steps.resolve-github-app.outputs.installation-id }}"
+          echo "TF_VAR_github_app_pem_file<<EOF"
+          echo "${{ inputs.github-app-private-key }}"
+          echo "EOF"
+        } >> "$GITHUB_ENV"
+
+    - name: Set GITHUB_TOKEN from GitHub App
+      if: steps.github-app-token.outputs.token != ''
+      shell: bash
+      run: echo "GITHUB_TOKEN=${{ steps.github-app-token.outputs.token }}" >> "$GITHUB_ENV"
+
+    # ========================================
+    # Cloudflare Authentication
+    # ========================================
+    - name: Set CLOUDFLARE_API_TOKEN
+      if: inputs.cloudflare-api-token != ''
+      shell: bash
+      run: echo "CLOUDFLARE_API_TOKEN=${{ inputs.cloudflare-api-token }}" >> "$GITHUB_ENV"
+
+    # ========================================
+    # Terraform Setup
+    # ========================================
+    - name: Get terraform-version
+      id: var
+      shell: bash
+      run: |
+        TF_VERSION_DIR="${TF_VERSION_DIR:-.}"
+        echo "terraform-version=$(cat ${TF_VERSION_DIR}/.terraform-version)" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+      with:
+        terraform_wrapper: false
+        terraform_version: ${{ steps.var.outputs.terraform-version }}
+
+    - name: Cache Terraform providers
+      if: env.TF_CACHE_DISABLED == ''
+      id: cache
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5
+      with:
+        path: ${{ inputs.directory }}/.terraform/providers
+        key: terraform-providers-${{ hashFiles(format('{0}/.terraform.lock.hcl', inputs.directory)) }}
+
+    - name: Terraform init
+      shell: bash
+      run: |
+        terraform -chdir=${{ inputs.directory }} init

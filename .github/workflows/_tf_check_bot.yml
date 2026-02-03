@@ -1,0 +1,26 @@
+name: Check Bot
+
+on:
+  workflow_call:
+    outputs:
+      is_bot:
+        description: whether actor is bot user
+        value: ${{ jobs.check_bot.outputs.is_bot }}
+
+jobs:
+  check_bot:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    outputs:
+      is_bot: ${{ steps.check_bot.outputs.is_bot }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        
+      - name: Check if actor is in bot list
+        id: check_bot
+        run: |
+          if jq -r '.[]' .github/tf/config/bots.json | grep -Fq "${{ github.actor }}"; then
+            echo "is_bot=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_bot=false" >> "$GITHUB_OUTPUT"
+          fi

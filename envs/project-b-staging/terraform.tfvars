@@ -1,0 +1,7 @@
+project_id            = "project-b-staging"
+region                = "asia-northeast1"
+env                   = "stg"
+gke_cluster_name      = "default"
+teleport_proxy_addr   = "teleport.example.com:443"
+teleport_version      = "18.5.1"
+teleport_cluster_name = "teleport.example.com"

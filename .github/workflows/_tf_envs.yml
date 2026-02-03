@@ -1,0 +1,36 @@
+name: Get Environment Settings
+
+on:
+  workflow_call:
+    outputs:
+      bot_name:
+        description: bot name
+        value: ${{ jobs.envs.outputs.bot_name }}
+      max_parallel:
+        description: max parallel
+        value: ${{ jobs.envs.outputs.max_parallel }}
+
+jobs:
+  envs:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    outputs:
+      bot_name: ${{ steps.bot_name.outputs.bot_name }}
+      max_parallel: ${{ steps.outputs.outputs.TF_MAX_PARALLEL_JOBS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Load Environment Variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Set Outputs
+        id: outputs
+        shell: bash
+        run: echo "TF_MAX_PARALLEL_JOBS=${TF_MAX_PARALLEL_JOBS}" >> "$GITHUB_OUTPUT"
+
+      - name: Bot Name
+        id: bot_name
+        shell: bash
+        run: |
+          BOT_NAME=$(echo "$GIT_USER_EMAIL" | sed -n 's/.*+\(.*\)@.*/\1/p')
+          echo "bot_name=$BOT_NAME" >> "$GITHUB_OUTPUT"

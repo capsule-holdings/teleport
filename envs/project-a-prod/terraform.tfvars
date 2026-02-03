@@ -1,0 +1,7 @@
+project_id            = "project-a-prod"
+region                = "asia-northeast1"
+env                   = "prd"
+gke_cluster_name      = "prod-standard"
+teleport_proxy_addr   = "teleport.example.com:443"
+teleport_version      = "18.5.1"
+teleport_cluster_name = "teleport.example.com"

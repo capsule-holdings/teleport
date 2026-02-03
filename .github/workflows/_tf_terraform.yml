@@ -1,0 +1,156 @@
+name: Terraform Workflow
+
+on:
+  workflow_call:
+    inputs:
+      directory:
+        required: true
+        type: string
+      terraform_command_options:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-latest-commit:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    steps:
+      - name: Compare Commits
+        id: compare-latest
+        if: github.run_attempt > 1 # re-runしたときのみ実行する
+        run: |
+          COMMAND_OPTIONS=(${{ inputs.terraform_command_options }})
+          FIRST_COMMAND=${COMMAND_OPTIONS[0]}
+
+          echo "CURRENT_COMMIT=${{ github.sha }}"
+          LATEST_COMMIT=$(gh api repos/${{ github.repository }}/commits/main --jq '.sha')
+          echo "LATEST_COMMIT=$LATEST_COMMIT"
+
+          # 古いcommit hashでapplyしようとした場合はエラーを返す
+          if [ "$FIRST_COMMAND" = "apply" ] && [ "${{ github.sha }}" != "$LATEST_COMMIT" ]; then
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  terraform:
+    needs: check-latest-commit
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Split terraform_command_options and get the first element
+        id: parameter
+        run: |
+          command_options=(${{ inputs.terraform_command_options }})
+          first_command=${command_options[0]}
+          {
+            echo "TERRAFORM_ACTION=$first_command"
+            echo "TERRAFORM_ACTION_UPPER=${first_command^^}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "first_command=$first_command"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Load Environment Variables
+        uses: ./.github/actions/tf_load_env
+        with:
+          directory: ${{ inputs.directory }}
+
+      - name: Generate a token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ env.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - name: Set Slack outputs
+        id: slack
+        run: |
+          {
+            echo "slack_channel_id=${{ env.SLACK_CHANNEL_ID }}"
+            echo "slack_mention_name=${{ env.SLACK_MENTION_NAME }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Init
+        uses: ./.github/actions/tf_init
+        with:
+          directory: ${{ inputs.directory }}
+          aws-secret-access-key: ${{ secrets[env.AWS_SECRET_ACCESS_KEY_NAME] }}
+          gcp-service-account-key: ${{ secrets[env.GCP_SERVICE_ACCOUNT_KEY_NAME] }}
+          github-app-private-key: ${{ secrets[env.GITHUB_APP_PRIVATE_KEY_NAME] }}
+          cloudflare-api-token: ${{ secrets[env.CLOUDFLARE_API_TOKEN_NAME] }}
+        env:
+          TERRAFORM_ACTION: ${{ env.TERRAFORM_ACTION }}
+          TERRAFORM_ACTION_UPPER: ${{ env.TERRAFORM_ACTION_UPPER }}
+
+      - uses: shmokmt/actions-setup-tfcmt@04d5aa6dc61eaa69a4d00257224c9b97f4857819 # v2
+
+      # Botユーザではない（ただしdevin-ai-integration[bot]は除く） && pullreqの場合のみ && _TF_CLI_ARGSが設定されている場合は環境変数をオーバーライドする(-refreshオプションの指定)
+      - name: Set Env TF_CLI_ARGS
+        if: (endsWith(github.actor, '[bot]') == false || github.actor == 'devin-ai-integration[bot]') && github.event_name == 'pull_request' && env._TF_CLI_ARGS != null
+        run: |
+          echo "TF_CLI_ARGS=$_TF_CLI_ARGS" >> "$GITHUB_ENV"
+
+      - name: Terraform Command
+        if: github.event_name != 'pull_request' && github.event_name != 'push'
+        run: |
+          terraform -chdir=${{ inputs.directory }} ${{ inputs.terraform_command_options }}
+        env:
+          GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
+
+      - name: Terraform Command
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        id: terraform-command
+        run: |
+          # Execute terraform command and save output to a file
+          terraform -chdir=${{ inputs.directory }} ${{ inputs.terraform_command_options }} 2>&1 | tee terraform_output.txt
+          terraform_exit_code=${PIPESTATUS[0]}
+          echo "terraform_exit_code=$terraform_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Tfcmt Command
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        run: |
+          if [ "${{ env.TERRAFORM_ACTION }}" = "plan" ]; then
+            OPTION="--skip-no-changes -patch"
+          else
+            OPTION=""
+          fi
+          # shellcheck disable=SC2086
+          tfcmt \
+            -config ${{ github.workspace }}/.github/tf/config/tfcmt/template.yml \
+            -var Pusher:${{ github.actor }} \
+            -var WorkingDir:${{ inputs.directory }} \
+            -var target:${{ inputs.directory }} \
+            ${{ env.TERRAFORM_ACTION }} $OPTION \
+            -- cat terraform_output.txt
+
+          # Propagate the original terraform exit code
+          if [ "${{ steps.terraform-command.outputs.terraform_exit_code }}" != "0" ]; then
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    outputs:
+      job_status: ${{ job.status }}
+      first_command: ${{ steps.parameter.outputs.first_command }}
+      slack_channel_id: ${{ steps.slack.outputs.slack_channel_id }}
+      slack_mention_name: ${{ steps.slack.outputs.slack_mention_name }}
+
+  slack-notification:
+    needs: terraform
+    if: ${{ always() && needs.terraform.outputs.first_command == 'apply' && needs.terraform.outputs.slack_channel_id != '' }}
+    uses: ./.github/workflows/_tf_slack_notification.yml
+    with:
+      directory: ${{ inputs.directory }}
+      job_status: ${{ needs.terraform.outputs.job_status }}
+      slack_channel_id: ${{ needs.terraform.outputs.slack_channel_id }}
+      slack_mention_name: ${{ needs.terraform.outputs.slack_mention_name }}
+    secrets: inherit

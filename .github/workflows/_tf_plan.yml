@@ -1,0 +1,50 @@
+name: Terraform Plan Common
+
+on:
+  workflow_call:
+    inputs:
+      is_bot:
+        required: true
+        type: string
+      terraform_command_options:
+        required: true
+        type: string
+    outputs:
+      result:
+        description: plan result
+        value: ${{ jobs.plan_status.outputs.result }}
+
+jobs:
+  prepare:
+    uses: ./.github/workflows/_tf_prepare.yml
+    secrets: inherit
+
+  plan:
+    if: needs.prepare.outputs.dirs != '[]'
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJson(needs.prepare.outputs.dirs) }}
+      max-parallel: ${{ fromJson(needs.prepare.outputs.max_parallel) }}
+    uses: ./.github/workflows/_tf_terraform.yml
+    with:
+      directory: ${{ matrix.dir }}
+      terraform_command_options: ${{ inputs.terraform_command_options }}
+    secrets: inherit
+
+  plan-skipped:
+    if: needs.prepare.outputs.dirs == '[]'
+    needs: [prepare]
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    steps:
+      - name: No terraform changes detected
+        run: echo "No terraform directories to plan"
+
+  plan_status:
+    needs: [plan, plan-skipped]
+    if: always()
+    uses: ./.github/workflows/_tf_create_status.yml
+    with:
+      name: terraform_plan
+      result: ${{ (needs.plan.result == 'success' || needs.plan-skipped.result == 'success') && 'success' || 'failure' }}

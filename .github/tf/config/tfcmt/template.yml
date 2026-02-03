@@ -1,0 +1,187 @@
+embedded_var_names:
+  - Pusher
+  - WorkingDir
+ci:
+  pr: []
+  owner: []
+  repo: []
+  sha: []
+  link: []
+  vars: {}
+templates:
+  plan_title: "### {{if eq .ExitCode 1}}:skull: `Terraform Plan Failure !!` :skull:{{end}}{{if eq .ExitCode 0}}:tada: `Terraform Plan Success !!` :tada:{{end}}"
+  apply_title: "### {{if eq .ExitCode 1}}:skull::skull: `Terraform Apply Failure !!` :skull::skull:{{end}}{{if eq .ExitCode 0}}:tada::tada: `Terraform Apply Success !!` :tada::tada:{{end}}"
+
+  result: "{{if .Result}}<pre><code>{{ .Result }}</code></pre>{{end}}"
+  updated_resources: |
+    {{if .CreatedResources}}
+    * Create
+    {{- range .CreatedResources}}
+      * {{.}}
+    {{- end}}{{end}}{{if .UpdatedResources}}
+    * Update
+    {{- range .UpdatedResources}}
+      * {{.}}
+    {{- end}}{{end}}{{if .DeletedResources}}
+    * Delete
+    {{- range .DeletedResources}}
+      * {{.}}
+    {{- end}}{{end}}{{if .ReplacedResources}}
+    * Replace
+    {{- range .ReplacedResources}}
+      * {{.}}
+    {{- end}}{{end}}
+  deletion_warning: |
+    ### :warning: Resource Deletion will happen :warning:
+    This plan contains resource delete operation. Please check the plan result very carefully!
+  changed_result: |
+    {{if .ChangedResult}}
+    <details><summary>Change Result (Click me)</summary>
+    {{wrapCode .ChangedResult}}
+    </details>
+    {{end}}
+  change_outside_terraform: |
+    {{if .ChangeOutsideTerraform}}
+    <details><summary>:warning: Note: Objects have changed outside of Terraform</summary>
+    {{wrapCode .ChangeOutsideTerraform}}
+    </details>
+    {{end}}
+  warning: |
+    {{if .Warning}}
+    <details><summary>:warning: Warnings :warning:(Click me)</summary>
+    {{wrapCode .Warning}}
+    </details>
+    {{end}}
+  error_message: |
+    {{if .ErrorMessages}}
+    ## :warning: Errors
+    {{range .ErrorMessages}}
+    * {{. -}}
+    {{- end}}{{end}}
+terraform:
+  plan:
+    disable_label: false
+    template: |
+      {{template "plan_title" .}}
+
+      {{if .Vars.Pusher}}Pusher: @{{.Vars.Pusher}}{{end}}
+      {{if .Vars.WorkingDir}}Working Directory: `{{.Vars.WorkingDir}}`{{end}}
+      {{if .Link}}[CI link]({{.Link}}){{end}}
+
+      {{template "result" .}}
+      {{template "updated_resources" .}}
+
+      {{template "changed_result" .}}
+      {{template "warning" .}}
+      {{template "error_message" .}}
+
+    # ---- 機械的に50文字へ前方トリム（末尾保持、"..."使用） ----
+    when_add_or_update_only:
+      label: |
+        {{- $suffix := "add or update" -}}
+        {{- $max := 50 -}}
+        {{- $sep := " - " -}}
+        {{- $avail := sub $max (add (len $suffix) (len $sep)) -}} {{/* WorkingDir に使える枠 */}}
+        {{- if or (not .Vars.WorkingDir) (le $avail 0) -}}
+          {{ $suffix }}
+        {{- else -}}
+          {{- $wd := .Vars.WorkingDir -}}
+          {{- if le (len $wd) $avail -}}
+            {{ $wd }}{{ $sep }}{{ $suffix }}
+          {{- else -}}
+            {{- $tail := sub $avail 3 -}} {{/* "..." の3文字を確保 */}}
+            {{- if lt $tail 1 -}}{{- $tail = 1 -}}{{- end -}}
+            {{- $end := len $wd -}}
+            {{- $start := sub $end $tail -}}
+            ...{{ substr (int $start) (int $end) $wd }}{{ $sep }}{{ $suffix }}
+          {{- end -}}
+        {{- end -}}
+      label_color: fdda0d # yellow
+
+    when_destroy:
+      label: |
+        {{- $suffix := "destroy" -}}
+        {{- $max := 50 -}}
+        {{- $sep := " - " -}}
+        {{- $avail := sub $max (add (len $suffix) (len $sep)) -}}
+        {{- if or (not .Vars.WorkingDir) (le $avail 0) -}}
+          {{ $suffix }}
+        {{- else -}}
+          {{- $wd := .Vars.WorkingDir -}}
+          {{- if le (len $wd) $avail -}}
+            {{ $wd }}{{ $sep }}{{ $suffix }}
+          {{- else -}}
+            {{- $tail := sub $avail 3 -}}
+            {{- if lt $tail 1 -}}{{- $tail = 1 -}}{{- end -}}
+            {{- $end := len $wd -}}
+            {{- $start := sub $end $tail -}}
+            ...{{ substr (int $start) (int $end) $wd }}{{ $sep }}{{ $suffix }}
+          {{- end -}}
+        {{- end -}}
+      label_color: d93f0b # red
+      template: |
+        {{template "plan_title" .}}
+
+        {{if .Vars.Pusher}}Pusher: @{{.Vars.Pusher}}{{end}}
+        {{if .Vars.WorkingDir}}Working Directory: `{{.Vars.WorkingDir}}`{{end}}
+        {{if .Link}}[CI link]({{.Link}}){{end}}
+
+        {{template "deletion_warning" .}}
+
+        {{template "result" .}}
+        {{template "updated_resources" .}}
+
+        {{template "changed_result" .}}
+        {{template "warning" .}}
+        {{template "error_message" .}}
+
+    when_no_changes:
+      label: |
+        {{- $suffix := "no changes" -}}
+        {{- $max := 50 -}}
+        {{- $sep := " - " -}}
+        {{- $avail := sub $max (add (len $suffix) (len $sep)) -}}
+        {{- if or (not .Vars.WorkingDir) (le $avail 0) -}}
+          {{ $suffix }}
+        {{- else -}}
+          {{- $wd := .Vars.WorkingDir -}}
+          {{- if le (len $wd) $avail -}}
+            {{ $wd }}{{ $sep }}{{ $suffix }}
+          {{- else -}}
+            {{- $tail := sub $avail 3 -}}
+            {{- if lt $tail 1 -}}{{- $tail = 1 -}}{{- end -}}
+            {{- $end := len $wd -}}
+            {{- $start := sub $end $tail -}}
+            ...{{ substr (int $start) (int $end) $wd }}{{ $sep }}{{ $suffix }}
+          {{- end -}}
+        {{- end -}}
+      label_color: 0e8a16 # green
+
+    when_plan_error:
+      disable_label: true
+    when_parse_error:
+      disable_label: true
+
+  apply:
+    template: |
+      {{template "apply_title" .}}
+      {{if eq .ExitCode 1}}mention: `@here`{{end}}
+      {{if .Vars.Pusher}}**Pusher**: @{{.Vars.Pusher}}{{end}}
+      {{if .Vars.WorkingDir}}**Working Directory**: `{{.Vars.WorkingDir}}`{{end}}
+      {{if .Link}}**[CI link]({{.Link}})**{{end}}
+
+      {{template "changed_result" .}}
+      {{template "warning" .}}
+      {{template "error_message" .}}
+    when_parse_error:
+      template: |
+        ### Apply Result{{if .Vars.target}} ({{.Vars.target}}){{end}}
+        {{if .Vars.Pusher}}**Pusher**: @{{.Vars.Pusher}}{{end}}
+        {{if .Vars.WorkingDir}}**Working Directory**: `{{.Vars.WorkingDir}}`{{end}}
+        {{if .Link}}**[CI link]({{.Link}})**{{end}}
+
+        It failed to parse the result.
+
+        <details><summary>Details (Click me)</summary>
+        {{wrapCode .CombinedOutput}}
+        </details>

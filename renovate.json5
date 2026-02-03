@@ -1,0 +1,61 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+  ],
+  labels: [
+    'dependencies',
+    '{{datasource}}',
+  ],
+  rebaseWhen: 'behind-base-branch',
+  timezone: 'Asia/Tokyo',
+  schedule: [
+    'on tuesday',
+  ],
+  vulnerabilityAlerts: {
+    schedule: [
+      '* * * * *',
+    ],
+    labels: [
+      'security',
+    ],
+  },
+  minimumReleaseAge: '2 weeks',
+  internalChecksFilter: 'flexible',
+  packageRules: [
+    {
+      matchManagers: [
+        'github-actions',
+      ],
+      pinDigests: true,
+      groupName: 'github-actions',
+    },
+    {
+      matchDatasources: [
+        'terraform-provider',
+      ],
+      groupName: 'terraform providers',
+    },
+    {
+      matchDatasources: [
+        'terraform-module',
+      ],
+      groupName: 'terraform modules',
+    },
+  ],
+  customManagers: [
+    {
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^.github/workflows/.*\\.ya?ml$/',
+      ],
+      matchStrings: [
+        'tflint_version:\\s*(?<currentValue>v?[^\\s#]+)',
+      ],
+      datasourceTemplate: 'github-releases',
+      depNameTemplate: 'terraform-linters/tflint',
+      versioningTemplate: 'semver',
+      extractVersionTemplate: '^v?(?<version>.*)$',
+    },
+  ],
+}

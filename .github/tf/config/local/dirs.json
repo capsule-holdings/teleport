@@ -1,0 +1,7 @@
+[
+  "envs/teleport-central",
+  "envs/project-b-prod",
+  "envs/project-b-staging",
+  "envs/project-a-prod",
+  "envs/project-a-staging"
+]

@@ -1,0 +1,108 @@
+name: Detect Infrastructure Drift
+
+on:
+  schedule:
+    - cron: "0 0,3,6,8 * * 1-5" # UTC基準 (JST = UTC+9) 平日3時間に1回実行 (JST 9:00, 12:00, 15:00, 17:00)
+  workflow_dispatch: # 手動実行用
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  prepare:
+    uses: ./.github/workflows/_tf_prepare.yml
+    secrets: inherit
+
+  plan:
+    needs: [prepare]
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJson(needs.prepare.outputs.dirs) }}
+      max-parallel: ${{ fromJson(needs.prepare.outputs.max_parallel) }}
+    uses: ./.github/workflows/_tf_terraform.yml
+    with:
+      directory: ${{ matrix.dir }}
+      terraform_command_options: plan -detailed-exitcode
+    secrets: inherit
+
+  create_pullreq:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    needs: plan
+    if: failure() # 依存するジョブが失敗した場合のみ実行
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Load environment variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Generate a token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ env.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Load environment variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Output timestamp
+        run: date +"%Y-%m-%d %H:%M:%S %Z" > .github/tf/config/local/timestamp
+        env:
+          TZ: Asia/Tokyo
+
+      - name: Get timestamp
+        id: get_timestamp
+        run: echo "timestamp=$(cat .github/tf/config/local/timestamp)" >> "$GITHUB_ENV"
+
+      - name: Commit changes and push
+        run: |
+          git config --global user.email ${{ env.GIT_USER_EMAIL }}
+          git config --global user.name ${{ env.GIT_USER_NAME }}
+          git switch -C timestamp-update
+          git add .github/tf/config/local/timestamp
+          git commit -m "Detected infrastructure drift on ${{ env.timestamp }}"
+          git push origin timestamp-update -f
+
+      - name: Create a pull request
+        run: |
+          gh pr create \
+            --base main \
+            --head timestamp-update \
+            --title "Infrastructure Drift Detected - ${{ env.timestamp }}" \
+            --body "Terraform plan has detected infrastructure drift on ${{ env.timestamp }}. Please review the changes."
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+
+  close_pullreq:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    needs: plan
+    if: success() # 依存するジョブが成功した場合のみ実行
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Close pull request using gh CLI
+        run: |
+          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state open --head timestamp-update --json number --jq '.[0].number')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr close "$PR_NUMBER" --repo ${{ github.repository }}
+            echo "Closed PR #$PR_NUMBER"
+          else
+            echo "No open pull requests found for branch timestamp-update"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

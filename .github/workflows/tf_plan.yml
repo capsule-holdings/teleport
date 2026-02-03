@@ -1,0 +1,75 @@
+name: Terraform Plan Workflow
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+# Planの実行中に新しいコミットをプッシュした場合、処理をキャンセルする。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  check_bot:
+    uses: ./.github/workflows/_tf_check_bot.yml
+
+  # 一般ユーザー向けPlan
+  plan_human:
+    needs: [check_bot]
+    if: needs.check_bot.outputs.is_bot == 'false'
+    uses: ./.github/workflows/_tf_plan.yml
+    with:
+      is_bot: ${{ needs.check_bot.outputs.is_bot }}
+      terraform_command_options: plan
+    secrets: inherit
+
+  # Bot (dependabot/renovate) 向けPlan
+  plan_bot:
+    needs: [check_bot]
+    if: needs.check_bot.outputs.is_bot == 'true'
+    uses: ./.github/workflows/_tf_plan.yml
+    with:
+      is_bot: ${{ needs.check_bot.outputs.is_bot }}
+      terraform_command_options: plan -detailed-exitcode
+    secrets: inherit
+
+  # Bot PRの自動マージ
+  merge_pull_request:
+    needs: [check_bot, plan_bot]
+    if: needs.check_bot.outputs.is_bot == 'true'
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Load environment variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Generate a token
+        id: generate_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          app-id: ${{ env.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - name: Approve a PR
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+
+      - name: Enable auto-merge for Dependabot PRs
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+  statuses: write

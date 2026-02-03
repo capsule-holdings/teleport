@@ -1,0 +1,11 @@
+project_id          = "teleport-central"
+region              = "asia-northeast1"
+vpc_name            = "teleport"
+subnet_name         = "teleport-subnet"
+router_name         = "teleport-router"
+nat_ip_count        = 1
+domain_name         = "teleport.example.com"
+letsencrypt_email   = "teleport@example.com"
+github_client_id    = "Ov23xxxxxxxxxxxxx"
+github_organization = "my-organization"
+teleport_version    = "18.5.1"

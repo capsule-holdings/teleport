@@ -1,0 +1,100 @@
+name: Slack Notification Workflow
+
+on:
+  workflow_call:
+    inputs:
+      directory:
+        required: true
+        type: string
+      job_status:
+        required: true
+        type: string
+        description: "Job status (success, failure, cancelled)"
+      slack_channel_id:
+        required: true
+        type: string
+      slack_mention_name:
+        required: false
+        type: string
+        default: ""
+      slack_bot_name:
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  notify:
+    runs-on: ${{ vars.RUNNER_TERRAFORM }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Load Environment Variables
+        uses: ./.github/actions/tf_load_env
+
+      - name: Prepare Slack Notification Data
+        id: prep_slack_data
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Convert job status to uppercase for variable lookup
+          job_status="${{ inputs.job_status }}"
+          status_key="${job_status^^}"
+
+          # Use indirect variable expansion to get status-specific values
+          color_var="SLACK_STATUS_${status_key}_COLOR"
+          message_var="SLACK_STATUS_${status_key}_MESSAGE"
+          emoji_var="SLACK_STATUS_${status_key}_EMOJI"
+          icon_var="SLACK_STATUS_${status_key}_ICON"
+
+          status_color="${!color_var}"
+          status_message="${!message_var}"
+          status_emoji="${!emoji_var}"
+          icon_url="${!icon_var}"
+
+          # Append mention to failure message if provided
+          mention="${{ inputs.slack_mention_name }}"
+          if [ "$job_status" = "failure" ] && [ -n "$mention" ]; then
+            status_message="${status_message} / ${mention}"
+          fi
+
+          # Write all variables to GITHUB_ENV
+          {
+            printf 'status_color=%s\n' "$status_color"
+            printf 'status_message=%s\n' "$status_message"
+            printf 'status_emoji=%s\n' "$status_emoji"
+            printf 'icon_url=%s\n' "$icon_url"
+          } >> "$GITHUB_ENV"
+
+      - name: Slack Notification
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ inputs.slack_channel_id }}
+            text: "${{ github.repository }} / ${{ inputs.directory }}"
+            username: ${{ inputs.slack_bot_name || env.SLACK_BOT_NAME }}
+            icon_url: ${{ env.icon_url }}
+            link_names: true
+            attachments:
+              - color: ${{ env.status_color }}
+                fields:
+                  - title: Status
+                    value: "${{ env.status_message }} ${{ env.status_emoji }}"
+                    short: true
+                  - title: Repository
+                    value: "<https://github.com/${{ github.repository }}|${{ github.repository }}>"
+                    short: true
+                  - title: Directory
+                    value: "${{ inputs.directory }}"
+                    short: true
+                  - title: Triggered by
+                    value: "<https://github.com/${{ github.actor }}|${{ github.actor }}>"
+                    short: true
+                  - title: Action
+                    value: "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+                    short: false
+                footer: "<https://github.com/${{ github.repository }}|${{ github.repository }}>"
+                footer_icon: "https://slack-imgs.com/?c=1&o1=wi32.he32.si&url=https%3A%2F%2Fslack.github.com%2Fstatic%2Fimg%2Ffavicon-neutral.png"
